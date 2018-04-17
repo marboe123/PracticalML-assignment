@@ -1,0 +1,173 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "Marcel Boers"
+date: "17 april 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Introduction
+
+This R Markdown document is the final report of the Peer Assessment project in Coursera's course Practical Machine Learning, as part of the Specialization in Data Science. It has been developped in RStudio using Knitr, meant to be published in html format.
+This analysis is the basis for the course quiz and a prediction assignment writeup. The goal of the project is to predict the manner in which 6 participants performed some exercise as described below. This is the independent classe-variable in the training set. The machine learning algorithm described here is applied to the 20 test cases available in the test data and the predictions are submitted to the Course Project Prediction Quiz for automated grading.
+
+The data for this project is provided by Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. 
+
+
+## Loading libraries and loading the data
+
+In this section we load the libraries and the data and split the trainingdata into a training and a testset. We leave the original TestSet for the calculation of the Expected out of sample error.
+
+```{r section1, echo=TRUE}
+
+# load libraries
+library(knitr)
+library(caret)
+library(rattle)
+library(rpart.plot)
+
+# set the URL for the download
+wwwTrain <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+wwwTest  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# download the datasets
+training <- read.csv(url(wwwTrain))
+testing  <- read.csv(url(wwwTest))
+
+# create a partition with the training dataset 
+inTrain  <- createDataPartition(training$classe, p=0.70, list=FALSE)
+TrainSet <- training[inTrain, ]
+TestSet  <- training[-inTrain, ]
+dim(TrainSet)
+
+# set seed for reproducibility        
+set.seed(12345)
+
+```
+
+## Cleaning the data
+
+We remove all variables with near zero variance by using the nearZeroVar-function and remove all variables which are mostly NA.
+
+```{r section2, echo=TRUE}
+# remove variables with Nearly Zero Variance
+NZV <- nearZeroVar(TrainSet)
+TrainSet <- TrainSet[, -NZV]
+TestSet  <- TestSet[, -NZV]
+dim(TrainSet)
+dim(TestSet)
+
+# remove variables that are mostly NA
+AllNA    <- sapply(TrainSet, function(x) mean(is.na(x))) > 0.95
+TrainSet <- TrainSet[, AllNA==FALSE]
+TestSet  <- TestSet[, AllNA==FALSE]
+dim(TrainSet)
+dim(TestSet)
+
+# remove identification only variables (columns 1 to 5)
+TrainSet <- TrainSet[, -(1:5)]
+TestSet  <- TestSet[, -(1:5)]
+dim(TrainSet)
+
+
+```
+
+## Quickscan of the data
+
+The dependent variable 'classe' is based on 5 activities performed by 6 persons. Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. 
+
+```{r section3, echo=TRUE}
+
+
+table(training$user_name, training$classe)
+
+
+```
+
+## Prediction modelling
+
+In this section we train several models on the training data in order to build a prediction model.
+
+First I  have build a classification model using Caret with the rpart method. Since the initial results with default settings resulted in an accuracy of only 0.4879, I have added tuning with repeated Cross Validation:
+```{r section4, echo=TRUE}
+
+mod_rpart <- train(classe ~ ., method = "rpart", data = TrainSet,tuneLength = 50, 
+                   metric = "Accuracy",
+                   trControl = trainControl(method = "repeatedcv",
+                                            number = 4,
+                                            repeats = 5,
+                                            summaryFunction = multiClassSummary,
+                                            classProbs = TRUE))
+
+pred_rpart <- predict(mod_rpart, TestSet)
+confusionMatrix(pred_rpart, TestSet$classe)
+
+fancyRpartPlot(mod_rpart$finalModel)
+
+```
+The accuracy has improved significant from 0.4879 to 0.9641. It is possible that the large number of nodes is the result of overfitting, although the model is based on the TrainSet and the accuracy is based on the TestSet. The out of sample error is 3.59 (1-0.9641).
+
+
+Second we build a similar model using rpart:
+```{r section7, echo=TRUE}
+
+# model fit
+set.seed(12345)
+modFitDecTree <- rpart(classe ~ ., data=TrainSet, method="class")
+fancyRpartPlot(modFitDecTree)
+
+# prediction on Test dataset
+predictDecTree <- predict(modFitDecTree, newdata=TestSet, type="class")
+confMatDecTree <- confusionMatrix(predictDecTree, TestSet$classe)
+confMatDecTree
+
+```
+The rpart method is less accurate than the Caret rpart method based on both accuracies in this case. This is the result of the tuning we did in Caret using cross-validation to optimize the model hyperparameters. The out of sample error for the rpart method is 17.08 (1-0.8292). 
+
+
+Third we fit a Random Forest model:
+```{r section5, echo=TRUE}
+
+mod_rf <- train(classe~., data = TrainSet, method = "rf")
+pred_rf <- predict(mod_rf, TestSet)
+confusionMatrix(pred_rf, TestSet$classe)
+
+```
+The Random Forest model gives an accuracy of 0.9969. The out of sample error is 0.31. This is a very good result. The result is such extreme that it is a bit suspicious. To obtain these results the participants should perform the activities in perfect similarity. 
+
+
+Fourth we fit a Boosted Trees model using gbm:
+```{r section6, echo=TRUE}
+
+mod_gbm <- train(classe ~ ., data = TrainSet, method = "gbm", verbose = FALSE)
+pred_gbm <- predict(mod_gbm, TestSet)
+confusionMatrix(pred_gbm, TestSet$classe)
+
+```
+The Boosted Trees model gives an accuracy of 0.9869. This is a very good result as well. The out of sample error is 1.31.
+
+
+
+## Prediction-model selection and predicting on the Test-data.
+
+The Random Forest model gave the highest accuracy across all tested models. For that reason we select the Random Forest model for prediction on the Test-data.
+
+```{r section8, echo=TRUE}
+
+pred_testdata <- predict(mod_rf, testing)
+pred_testdata
+
+
+```
+
+The Random Forest model accurately predicted the classification of 20 observations.
+
+
+## Conclusion
+
+In this assignment, we accurately predicted the classification of 20 observations using a Random Forest algorithm trained on a subset of the data.
+
+The realized accuracy of 99.69% is an extreme high value and for that reason a bit suspicious. Nevertheless the conclusion remains the same that Random Forest algorithm is the best predictionmodel for this dataset.
+
